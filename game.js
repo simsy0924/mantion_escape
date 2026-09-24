@@ -72,14 +72,17 @@
   var codeMode = null;
   var codeValue = "";
   var toastTimer = 0;
+  var scareTimer = 0;
+  var scareTriggeredThisAction = false;
   var audioContext = null;
+  var ambienceNodes = [];
   var $ = function (selector) { return document.querySelector(selector); };
 
   function freshState() {
     return {
       started: false, room: "foyer", visited: ["foyer"], inventory: [], notes: [],
       flags: { portraits: false, studyOpened: false, cellarUnlocked: false, fuseInstalled: false, powerOn: false, exitOpened: false },
-      sound: false, lastText: "저택 안은 숨을 죽인 듯 고요하다."
+      sound: false, dread: 0, inspected: [], scareEvents: [], lastText: "저택 안은 숨을 죽인 듯 고요하다."
     };
   }
   function loadState() {
@@ -89,7 +92,11 @@
       var saved = JSON.parse(raw);
       if (!saved || !saved.flags || !ROOM_DATA[saved.room]) return null;
       var defaults = freshState();
-      return Object.assign(defaults, saved, { flags: Object.assign(defaults.flags, saved.flags) });
+      var restored = Object.assign(defaults, saved, { flags: Object.assign(defaults.flags, saved.flags) });
+      restored.inspected = Array.isArray(saved.inspected) ? saved.inspected : [];
+      restored.scareEvents = Array.isArray(saved.scareEvents) ? saved.scareEvents : [];
+      restored.dread = typeof saved.dread === "number" ? saved.dread : 0;
+      return restored;
     } catch (error) { return null; }
   }
   function saveState() {
@@ -138,11 +145,15 @@
     updatePanels();
     saveState();
     if (room === "basement" && !state.flags.powerOn) setMessage("보일러실에는 전기가 들어오지 않는다. 차단기함의 빈자리가 눈에 띈다.");
+    else if (room === "kitchen" && state.flags.powerOn) triggerScare("pursuit-through-kitchen", "주방 문이 저절로 닫힌다. 복도 쪽 발소리가 빠르게 가까워졌다가 바로 뒤에서 멎는다.", "close");
     else setMessage(ROOM_DATA[room].description);
   }
   function renderRoom() {
     var data = ROOM_DATA[state.room];
-    $("#scene").className = "scene scene--" + state.room;
+    window.clearTimeout(scareTimer);
+    $("#horror-overlay").classList.remove("is-active");
+    $("#horror-copy").textContent = "";
+    $("#scene").className = "scene scene--" + state.room + (state.flags.powerOn ? " scene--powered" : "");
     $("#scene-art").innerHTML = data.art;
     $("#room-name").textContent = data.name;
     $("#room-kicker").textContent = data.kicker;
@@ -204,6 +215,12 @@
     var percent = Math.round(checks.filter(Boolean).length / checks.length * 100);
     $("#progress-label").textContent = percent + "%";
     $("#progress-bar").style.width = percent + "%";
+    var dread = Math.max(0, Math.min(100, state.dread || 0));
+    var presenceLabel = dread < 20 ? "잠잠하다" : dread < 48 ? "누가 지켜본다" : dread < 76 ? "가까이 다가온다" : "바로 뒤에 있다";
+    $("#presence-label").textContent = presenceLabel;
+    $("#presence-bar").style.width = dread + "%";
+    $(".presence-row").classList.toggle("is-close", dread >= 70);
+    $(".presence-track").classList.toggle("is-close", dread >= 70);
 
     if (!state.flags.portraits) {
       $("#objective-title").textContent = "현관의 단서를 찾으세요";
@@ -228,8 +245,8 @@
       $("#objective-copy").textContent = "현관으로 돌아가 이 저택을 빠져나가세요.";
     }
     $("#status-label").textContent = state.started ? "조사 진행 중" : "기록 대기 중";
-    $("#sound-toggle").setAttribute("aria-label", state.sound ? "효과음 끄기" : "효과음 켜기");
-    $("#sound-toggle").title = state.sound ? "효과음 끄기" : "효과음 켜기";
+    $("#sound-toggle").setAttribute("aria-label", state.sound ? "소리 끄기" : "소리 켜기");
+    $("#sound-toggle").title = state.sound ? "소리 끄기" : "소리 켜기";
     $("#sound-symbol").textContent = state.sound ? "♫" : "♪";
     $("#continue-button").hidden = !state.started;
     $("#start-button").querySelector("span").textContent = state.started ? "새로 조사 시작" : "조사 시작";
@@ -263,6 +280,43 @@
     }
     goToRoom(route);
   }
+  function triggerScare(id, text, variant) {
+    if (state.scareEvents.indexOf(id) >= 0) return false;
+    state.scareEvents.push(id);
+    scareTriggeredThisAction = true;
+    var overlay = $("#horror-overlay");
+    overlay.setAttribute("data-variant", variant || "doorway");
+    $("#horror-copy").textContent = text;
+    overlay.classList.remove("is-active");
+    void overlay.offsetWidth;
+    overlay.classList.add("is-active");
+    window.clearTimeout(scareTimer);
+    scareTimer = window.setTimeout(function () {
+      overlay.classList.remove("is-active");
+      $("#horror-copy").textContent = "";
+    }, 1850);
+    setMessage(text);
+    playScareCue();
+    return true;
+  }
+
+  function advancePresence(id) {
+    var inspectable = ["frontDoor", "portraits", "entryTable", "sofa", "gramophone", "window", "safe", "desk", "bookcase", "drawer", "tableware", "hatch", "breaker", "boiler", "crate"];
+    if (inspectable.indexOf(id) < 0 || state.inspected.indexOf(id) >= 0) return;
+    state.inspected.push(id);
+    state.dread = Math.min(100, (state.dread || 0) + 14);
+    updatePanels();
+    saveState();
+    if (scareTriggeredThisAction || codeMode) return;
+    if (state.dread >= 24 && state.scareEvents.indexOf("doorway-shadow") < 0) {
+      triggerScare("doorway-shadow", "문틈에 사람 그림자가 선다. 눈을 한 번 깜빡이는 사이 사라졌다.", "doorway");
+    } else if (state.dread >= 52 && state.scareEvents.indexOf("following-steps") < 0) {
+      triggerScare("following-steps", "계단 위에서 발소리가 난다. 하나, 둘, 셋. 네 번째 소리는 바로 뒤에서 멈춘다.", "close");
+    } else if (state.dread >= 78 && state.scareEvents.indexOf("breath-behind") < 0) {
+      triggerScare("breath-behind", "어깨 바로 뒤에서 숨소리가 들린다. 돌아보면 빈 방뿐이다.", "close");
+    }
+  }
+
   function handleSpot(id) {
     switch (id) {
       case "frontDoor":
@@ -287,10 +341,12 @@
         } else setMessage("소파 틈은 비어 있다. 축음기에서 짧은 긁는 소리가 난다.");
         break;
       case "gramophone":
-        setMessage("축음기 바늘이 홈을 긁는다. 끊어진 음성 사이로 누군가 숫자를 세는 소리가 들린다.");
+        if (!state.scareEvents.includes("gramophone-voice")) triggerScare("gramophone-voice", "축음기에서 아이 목소리가 샌다. “뒤를 보지 마.” 바늘은 이미 멈춰 있다.", "close");
+        else setMessage("축음기 바늘은 멈췄는데, 방 안에서는 아직 낮은 숨소리가 이어진다.");
         break;
       case "window":
-        setMessage("창문은 안쪽에서 잠겨 있다. 유리 너머로 정원 대신 짙은 안개만 보인다.");
+        if (state.flags.powerOn && !state.scareEvents.includes("window-visitor")) triggerScare("window-visitor", "유리 너머의 형체가 천천히 당신과 같은 방향으로 고개를 돌린다.", "window");
+        else setMessage("창문은 안쪽에서 잠겨 있다. 유리 너머로 정원 대신 짙은 안개만 보인다.");
         break;
       case "safe":
         if (!state.flags.studyOpened) openCodeModal("safe");
@@ -327,8 +383,8 @@
           state.flags.fuseInstalled = true;
           state.flags.powerOn = true;
           addNote("power-note", "차단기함", "퓨즈를 끼우자 불이 들어왔다. 이제 현관 자물쇠를 확인할 수 있다.");
-          playTone(630, .16);
-          setMessage("퓨즈를 끼우고 레버를 올렸다. 저택 전체의 불이 깜빡이며 켜진다. 위층에서 발소리가 한 번 들렸다.");
+          setMessage("퓨즈를 끼우고 레버를 올렸다. 불이 켜지는 순간, 보일러 뒤의 검은 형체가 몸을 일으킨다.");
+          triggerScare("boiler-figure", "불이 켜지는 순간, 보일러 뒤의 검은 형체가 몸을 일으킨다.", "boiler");
         } else setMessage("차단기는 정상이다. 불빛이 약하게 떨리지만 전원은 유지되고 있다.");
         break;
       case "boiler": setMessage("보일러 안에서 무언가 세 번 두드린다. 손을 대자 금속이 따뜻하다."); break;
@@ -400,12 +456,14 @@
       acquire("cellarKey");
       addNote("safe-note", "금고 속 편지", "차단기가 살아나면 현관 잠금장치가 풀릴 거야. 비밀번호는 내가 이 집에 온 날, 10월 31일.");
       setMessage("금고가 열렸다. 지하실 열쇠와 낡은 편지를 챙겼다. 편지에는 10월 31일이 적혀 있다.");
+      triggerScare("safe-whisper", "금고 안쪽에서 목소리가 샌다. “그 열쇠를 갖고 내려오지 마.”", "doorway");
       playTone(740, .13);
     } else {
       state.flags.exitOpened = true;
       setMessage("숫자 자물쇠가 풀렸다. 문 너머로 차가운 밤공기가 들어온다.");
+      triggerScare("exit-figure", "현관문 밖이 아니라, 문 안쪽 어둠에서 누군가 달려든다.", "close");
       playTone(740, .19);
-      window.setTimeout(finishGame, 700);
+      window.setTimeout(finishGame, 1850);
     }
     updatePanels();
     saveState();
@@ -427,33 +485,82 @@
     else text = "현관문은 이제 열려 있어. 현관 홀로 돌아가 문을 조사해.";
     setMessage("힌트: " + text);
   }
+  function getAudioContext() {
+    if (audioContext) return audioContext;
+    var AudioCtor = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtor) return null;
+    audioContext = new AudioCtor();
+    return audioContext;
+  }
+  function startAmbience() {
+    if (!state.sound || ambienceNodes.length) return;
+    try {
+      var context = getAudioContext();
+      if (!context) return;
+      if (context.state === "suspended") context.resume();
+      [[54, .005], [57, .0035], [86, .0015], [110, .0015]].forEach(function (tone) {
+        var oscillator = context.createOscillator();
+        var gain = context.createGain();
+        oscillator.type = "sine";
+        oscillator.frequency.value = tone[0];
+        gain.gain.value = tone[1];
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+        oscillator.start();
+        ambienceNodes.push({ oscillator: oscillator, gain: gain });
+      });
+    } catch (error) {}
+  }
+  function stopAmbience() {
+    if (!audioContext || !ambienceNodes.length) return;
+    var nodes = ambienceNodes.slice();
+    ambienceNodes = [];
+    nodes.forEach(function (node) {
+      try {
+        node.gain.gain.cancelScheduledValues(audioContext.currentTime);
+        node.gain.gain.setTargetAtTime(.0001, audioContext.currentTime, .06);
+        node.oscillator.stop(audioContext.currentTime + .25);
+      } catch (error) {}
+    });
+  }
   function playTone(frequency, duration) {
     if (!state.sound) return;
     try {
-      var AudioCtor = window.AudioContext || window.webkitAudioContext;
-      if (!AudioCtor) return;
-      if (!audioContext) audioContext = new AudioCtor();
-      if (audioContext.state === "suspended") audioContext.resume();
-      var oscillator = audioContext.createOscillator();
-      var gain = audioContext.createGain();
+      startAmbience();
+      var context = getAudioContext();
+      if (!context) return;
+      if (context.state === "suspended") context.resume();
+      var oscillator = context.createOscillator();
+      var gain = context.createGain();
       oscillator.type = "sine";
       oscillator.frequency.value = frequency;
-      gain.gain.setValueAtTime(.0001, audioContext.currentTime);
-      gain.gain.exponentialRampToValueAtTime(.025, audioContext.currentTime + .015);
-      gain.gain.exponentialRampToValueAtTime(.0001, audioContext.currentTime + duration);
+      gain.gain.setValueAtTime(.0001, context.currentTime);
+      gain.gain.exponentialRampToValueAtTime(.025, context.currentTime + .015);
+      gain.gain.exponentialRampToValueAtTime(.0001, context.currentTime + duration);
       oscillator.connect(gain);
-      gain.connect(audioContext.destination);
+      gain.connect(context.destination);
       oscillator.start();
-      oscillator.stop(audioContext.currentTime + duration + .02);
+      oscillator.stop(context.currentTime + duration + .02);
     } catch (error) {}
+  }
+  function playScareCue() {
+    playTone(146, .44);
+    window.setTimeout(function () { playTone(92, .38); }, 120);
+    window.setTimeout(function () { playTone(196, .24); }, 270);
   }
   function toggleSound() {
     state.sound = !state.sound;
+    if (state.sound) {
+      startAmbience();
+      playTone(450, .08);
+    } else stopAmbience();
     saveState();
     updatePanels();
-    if (state.sound) playTone(450, .08);
   }
   function resetGame() {
+    stopAmbience();
+    window.clearTimeout(scareTimer);
+    $("#horror-overlay").classList.remove("is-active");
     state = freshState();
     state.started = true;
     state.lastText = "눈을 뜨자 낡은 현관 홀이다. 문은 잠겨 있고, 집 안에는 당신 말고 다른 숨소리가 들린다.";
@@ -487,7 +594,12 @@
   });
   $("#hotspots").addEventListener("click", function (event) {
     var button = event.target.closest("[data-spot]");
-    if (button) handleSpot(button.getAttribute("data-spot"));
+    if (button) {
+      scareTriggeredThisAction = false;
+      var spotId = button.getAttribute("data-spot");
+      handleSpot(spotId);
+      advancePresence(spotId);
+    }
   });
   $("#map-list").addEventListener("click", function (event) {
     var button = event.target.closest("[data-map-room]");
@@ -509,3 +621,4 @@
   }
   updatePanels();
 })();
+
