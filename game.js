@@ -58,7 +58,7 @@
     basement: {
       name: "보일러실", kicker: "지하 · 서쪽", description: "금속 배관이 낮게 울린다. 차단기함에는 퓨즈 하나가 비어 있다.",
       hint: "퓨즈를 찾아 차단기에 끼워 넣으세요.",
-      art: '<div class="prop prop-pipe one"></div><div class="prop prop-pipe two"></div><div class="prop prop-boiler"></div><div class="prop prop-crate"></div>',
+      art: '<div class="prop prop-pipe one"></div><div class="prop prop-pipe two"></div><div class="prop prop-breaker"></div><div class="prop prop-boiler"></div><div class="prop prop-crate"></div>',
       spots: [
         { id: "breaker", label: "차단기함", x: 76, y: 42 },
         { id: "boiler", label: "보일러", x: 49, y: 56 },
